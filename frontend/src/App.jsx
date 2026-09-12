@@ -1,66 +1,81 @@
 import { useEffect, useState } from "react";
-import "./index.css";
+import "./App.css";
 
 const API = "/api";
 
 function App() {
   const [screen, setScreen] = useState("start");
+  const [mode, setMode] = useState(null);
 
   const [questions, setQuestions] = useState([]);
-  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const [player1, setPlayer1] = useState("");
-  const [player2, setPlayer2] = useState("");
+  const [player1Name, setPlayer1Name] = useState("");
+  const [player2Name, setPlayer2Name] = useState("");
+
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [currentPlayer, setCurrentPlayer] = useState(1);
 
   const [player1Answers, setPlayer1Answers] = useState([]);
   const [player2Answers, setPlayer2Answers] = useState([]);
 
-  const [currentPlayer, setCurrentPlayer] = useState(1);
-
   const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  // ==========================================
-  // LOAD QUESTIONS
-  // ==========================================
-
+  // Load questions from FastAPI
   useEffect(() => {
-    fetch(`${API}/api/questions`)
-      .then((response) => {
+    async function loadQuestions() {
+      try {
+        const response = await fetch(`${API}/questions`);
+
         if (!response.ok) {
           throw new Error("Could not load questions");
         }
 
-        return response.json();
-      })
-      .then((data) => {
+        const data = await response.json();
+
         setQuestions(data.questions || []);
-        setError("");
-      })
-      .catch((err) => {
+        setLoading(false);
+      } catch (err) {
         console.error(err);
-        setError("Could not connect to the game server.");
-      });
+        setError(
+          "Could not connect to the game server. Make sure FastAPI is running."
+        );
+        setLoading(false);
+      }
+    }
+
+    loadQuestions();
   }, []);
 
-  // ==========================================
-  // START GAME
-  // ==========================================
+  function selectMode(selectedMode) {
+    setMode(selectedMode);
+    setError("");
+  }
 
   function startGame() {
-    if (!player1.trim() || !player2.trim()) {
-      alert("Rand perum nickname enter cheyyu 🍉");
+    if (!mode) {
+      setError("Please choose a game mode.");
+      return;
+    }
+
+    if (!player1Name.trim()) {
+      setError("Please enter your nickname 🍉");
+      return;
+    }
+
+    if (mode === "couple" && !player2Name.trim()) {
+      setError("Please enter the second player's nickname 🍉");
       return;
     }
 
     if (questions.length === 0) {
-      alert("Questions loading aanu. Kurachu seconds kazhinju try cheyyu.");
+      setError("Questions are still loading. Please wait.");
       return;
     }
 
-    setCurrentQuestion(0);
+    setQuestionIndex(0);
     setCurrentPlayer(1);
 
     setPlayer1Answers([]);
@@ -72,47 +87,19 @@ function App() {
     setScreen("game");
   }
 
-  // ==========================================
-  // SUBMIT FINAL ANSWER
-  // ==========================================
-
-  async function submitFinalAnswer(index) {
-    const question = questions[currentQuestion];
-
-    if (!question) {
-      return;
-    }
-
-    const answerData = {
-      question_id: question.id,
-      answer_index: index,
-      answer: question.choices[index],
-      score: question.scores?.[index] || {},
-    };
-
-    const finalP1 = [...player1Answers];
-    const finalP2 = [...player2Answers];
-
-    if (currentPlayer === 1) {
-      finalP1.push(answerData);
-    } else {
-      finalP2.push(answerData);
-    }
-
-    setLoading(true);
+  async function calculateResults(player1, player2 = []) {
+    setBusy(true);
     setError("");
 
     try {
-      const response = await fetch(`${API}/api/analyze`, {
+      const response = await fetch(`${API}/analyze`, {
         method: "POST",
-
         headers: {
           "Content-Type": "application/json",
         },
-
         body: JSON.stringify({
-          player1: finalP1,
-          player2: finalP2,
+          player1,
+          player2: mode === "couple" ? player2 : null,
         }),
       });
 
@@ -128,74 +115,77 @@ function App() {
       console.error(err);
 
       setError(
-        "Result calculate cheyyan pattiyilla. Backend running aano?"
+        "Could not calculate the result. Please check that FastAPI is running."
       );
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
-  // ==========================================
-  // HANDLE ANSWER
-  // ==========================================
-
-  function handleAnswer(index) {
-    const question = questions[currentQuestion];
-
-    if (!question || loading) {
+  async function chooseAnswer(answerIndex) {
+    if (busy) {
       return;
     }
 
-    const answerData = {
+    const question = questions[questionIndex];
+
+    if (!question) {
+      return;
+    }
+
+    const answer = {
       question_id: question.id,
-      answer_index: index,
-      answer: question.choices[index],
-      score: question.scores?.[index] || {},
+      answer_index: answerIndex,
+      answer: question.choices[answerIndex],
+      score: question.scores?.[answerIndex] || {},
     };
 
-    const isLastQuestion =
-      currentQuestion === questions.length - 1;
+    // SINGLE PLAYER
+    if (mode === "single") {
+      const updatedAnswers = [...player1Answers, answer];
 
-    // ------------------------------------------
-    // LAST QUESTION
-    // ------------------------------------------
+      setPlayer1Answers(updatedAnswers);
 
-    if (isLastQuestion && currentPlayer === 2) {
-      submitFinalAnswer(index);
+      if (questionIndex === questions.length - 1) {
+        await calculateResults(updatedAnswers);
+      } else {
+        setQuestionIndex(questionIndex + 1);
+      }
+
       return;
     }
 
-    // ------------------------------------------
-    // SAVE ANSWER
-    // ------------------------------------------
-
+    // TWO PLAYER - PLAYER 1
     if (currentPlayer === 1) {
-      setPlayer1Answers((previous) => [
-        ...previous,
-        answerData,
-      ]);
+      const updatedAnswers = [...player1Answers, answer];
 
+      setPlayer1Answers(updatedAnswers);
       setCurrentPlayer(2);
+
+      return;
+    }
+
+    // TWO PLAYER - PLAYER 2
+    const updatedAnswers = [...player2Answers, answer];
+
+    setPlayer2Answers(updatedAnswers);
+
+    if (questionIndex === questions.length - 1) {
+      await calculateResults(player1Answers, updatedAnswers);
     } else {
-      setPlayer2Answers((previous) => [
-        ...previous,
-        answerData,
-      ]);
-
-      setCurrentQuestion((previous) => previous + 1);
-
+      setQuestionIndex(questionIndex + 1);
       setCurrentPlayer(1);
     }
   }
 
-  // ==========================================
-  // RESTART
-  // ==========================================
-
-  function restartGame() {
+  function resetGame() {
     setScreen("start");
+    setMode(null);
 
-    setCurrentQuestion(0);
+    setPlayer1Name("");
+    setPlayer2Name("");
+
+    setQuestionIndex(0);
     setCurrentPlayer(1);
 
     setPlayer1Answers([]);
@@ -203,465 +193,323 @@ function App() {
 
     setResult(null);
     setError("");
-    setLoading(false);
   }
 
-  // ==========================================
+  // -------------------------
+  // LOADING
+  // -------------------------
+
+  if (loading) {
+    return (
+      <div className="app">
+        <div className="loading-card">
+          <div className="watermelon">🍉</div>
+
+          <h1>Loading...</h1>
+
+          <p>Preparing the watermelon...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------
   // START SCREEN
-  // ==========================================
+  // -------------------------
 
   if (screen === "start") {
     return (
       <div className="app">
         <div className="start-card">
+          <div className="watermelon">🍉</div>
 
-          <div className="watermelon-icon">
-            🍉
-          </div>
-
-          <h1>
+          <h1 className="title">
             BITE THE
-            <span> WATERMELON</span>
+            <span>WATERMELON</span>
           </h1>
 
           <p className="subtitle">
-            A ridiculous little game that secretly
-            analyzes your choices.
+            A fun little test of how you react to everyday situations.
           </p>
 
-          <div className="input-area">
+          {!mode ? (
+            <>
+              <h2 className="choose-title">Choose your mode</h2>
 
-            <input
-              type="text"
-              placeholder="Player 1 nickname"
-              value={player1}
-              onChange={(e) => setPlayer1(e.target.value)}
-              maxLength={20}
-            />
+              <div className="mode-grid">
+                <button
+                  className="mode-card"
+                  onClick={() => selectMode("single")}
+                >
+                  <div className="mode-icon">🧍</div>
 
-            <input
-              type="text"
-              placeholder="Player 2 nickname"
-              value={player2}
-              onChange={(e) => setPlayer2(e.target.value)}
-              maxLength={20}
-            />
+                  <h2>Single Player</h2>
 
-          </div>
+                  <p>
+                    Play alone and discover your own watermelon personality.
+                  </p>
+                </button>
 
-          <button
-            className="main-button"
-            onClick={startGame}
-          >
-            🍉 START BITING
-          </button>
+                <button
+                  className="mode-card"
+                  onClick={() => selectMode("couple")}
+                >
+                  <div className="mode-icon">👥</div>
 
-          <p className="tiny-text">
-            Entertainment & self-reflection only.
-            Not a psychological or relationship diagnosis.
-          </p>
+                  <h2>Two Player</h2>
 
-          {error && (
-            <p className="error">
-              {error}
-            </p>
+                  <p>
+                    Play with another person and compare your results.
+                  </p>
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="selected-mode">
+                {mode === "single"
+                  ? "🧍 Single Player"
+                  : "👥 Two Player"}
+              </div>
+
+              <div className="input-area">
+                <input
+                  type="text"
+                  placeholder="Your nickname"
+                  value={player1Name}
+                  maxLength={20}
+                  onChange={(event) =>
+                    setPlayer1Name(event.target.value)
+                  }
+                />
+
+                {mode === "couple" && (
+                  <input
+                    type="text"
+                    placeholder="Second player's nickname"
+                    value={player2Name}
+                    maxLength={20}
+                    onChange={(event) =>
+                      setPlayer2Name(event.target.value)
+                    }
+                  />
+                )}
+              </div>
+
+              <button
+                className="main-button"
+                onClick={startGame}
+              >
+                🍉 START BITING
+              </button>
+
+              <button
+                className="back-button"
+                onClick={() => {
+                  setMode(null);
+                  setError("");
+                }}
+              >
+                ← Change mode
+              </button>
+            </>
           )}
 
+          {error && <div className="error">{error}</div>}
+
+          <p className="tiny-text">
+            Entertainment & self-reflection only. Not a psychological
+            or relationship diagnosis.
+          </p>
         </div>
       </div>
     );
   }
 
-  // ==========================================
+  // -------------------------
   // GAME SCREEN
-  // ==========================================
+  // -------------------------
 
   if (screen === "game") {
-
-    const question = questions[currentQuestion];
+    const question = questions[questionIndex];
 
     if (!question) {
-      return (
-        <div className="app">
-          <div className="card">
-            <h2>Loading 🍉...</h2>
-          </div>
-        </div>
-      );
+      return null;
     }
 
     const progress =
-      ((currentQuestion + 1) / questions.length) * 100;
+      ((questionIndex + 1) / questions.length) * 100;
 
-    const playerName =
-      currentPlayer === 1
-        ? player1
-        : player2;
+    const currentName =
+      mode === "single"
+        ? player1Name
+        : currentPlayer === 1
+        ? player1Name
+        : player2Name;
 
     return (
       <div className="app">
-
         <div className="game-container">
 
-          {/* HEADER */}
-
           <div className="game-header">
-
             <div className="logo">
               🍉 BITE THE WATERMELON
             </div>
 
             <div className="round">
-              ROUND {currentQuestion + 1}
-              {" / "}
-              {questions.length}
+              QUESTION {questionIndex + 1} / {questions.length}
             </div>
-
           </div>
-
-          {/* PROGRESS */}
 
           <div className="progress-background">
-
             <div
               className="progress-bar"
-              style={{
-                width: `${progress}%`,
-              }}
+              style={{ width: `${progress}%` }}
             />
-
           </div>
-
-          {/* CURRENT PLAYER */}
 
           <div className="turn-card">
-
-            <span className="turn-label">
-              CURRENT BITER
+            <span>
+              {mode === "single"
+                ? "PLAYER"
+                : "CURRENT BITER"}
             </span>
 
-            <strong>
-              {playerName}
-            </strong>
-
+            <strong>{currentName}</strong>
           </div>
 
-          {/* QUESTION */}
-
           <div className="question-card">
-
             <div className="question-number">
               🍉 QUESTION {question.id}
             </div>
 
-            <h2 className="question-text">
-              {question.scenario}
-            </h2>
+            <h2>{question.scenario}</h2>
 
-            <p className="choose-text">
-              Nee entha cheyyum?
+            <p>
+              What would you do?
             </p>
-
           </div>
-
-          {/* ANSWERS */}
 
           <div className="choices">
+            {question.choices.map((choice, index) => (
+              <button
+                key={index}
+                className="choice-button"
+                disabled={busy}
+                onClick={() => chooseAnswer(index)}
+              >
+                <span className="choice-number">
+                  {String.fromCharCode(65 + index)}
+                </span>
 
-            {question.choices.map(
-              (choice, index) => (
-
-                <button
-                  key={index}
-                  className="choice-button"
-                  onClick={() => handleAnswer(index)}
-                  disabled={loading}
-                >
-
-                  <span className="choice-number">
-                    {String.fromCharCode(65 + index)}
-                  </span>
-
-                  <span>
-                    {choice}
-                  </span>
-
-                </button>
-
-              )
-            )}
-
+                <span>{choice}</span>
+              </button>
+            ))}
           </div>
 
-          <p className="hidden-text">
-            🤫 Your answer secretly adds watermelon seeds...
-          </p>
-
+          {mode === "couple" && (
+            <div className="secret-text">
+              🤫 {currentName}'s answer is secretly adding
+              watermelon seeds...
+            </div>
+          )}
         </div>
-
       </div>
     );
   }
 
-  // ==========================================
+  // -------------------------
   // RESULT SCREEN
-  // ==========================================
+  // -------------------------
 
   if (screen === "result") {
-
     if (!result) {
       return (
         <div className="app">
-          <div className="card">
-            <h2>
-              Cutting the watermelon... 🍉
-            </h2>
+          <div className="loading-card">
+            <div className="watermelon">🍉</div>
+            <h2>Cutting the watermelon...</h2>
           </div>
         </div>
       );
     }
 
-    const p1 = result.player1 || {};
-    const p2 = result.player2 || {};
-
     return (
       <div className="app">
-
         <div className="result-container">
 
-          {/* RESULT HEADER */}
-
           <div className="result-header">
-
             <div className="big-watermelon">
               🍉
             </div>
 
             <h1>
               WATERMELON
-              <span> CUT!</span>
+              <span>CUT!</span>
             </h1>
 
             <p>
               Okay... let's see what was hiding inside 👀
             </p>
-
           </div>
 
-          {/* PLAYER RESULTS */}
+          <div
+            className={
+              mode === "couple"
+                ? "players-results two"
+                : "players-results"
+            }
+          >
+            <ResultCard
+              name={player1Name}
+              data={result.player1}
+            />
 
-          <div className="players-results">
-
-            {/* PLAYER 1 */}
-
-            <div className="result-card">
-
-              <h2>
-                🍉 {player1}
-              </h2>
-
-              <div className="personality">
-                {p1.personality || "Watermelon Mystery 🍉"}
-              </div>
-
-              <div className="score-grid">
-
-                <Score
-                  name="Green"
-                  value={p1.green_score}
-                  icon="🟢"
-                />
-
-                <Score
-                  name="Sweetness"
-                  value={p1.sweetness}
-                  icon="🍬"
-                />
-
-                <Score
-                  name="Trust"
-                  value={p1.trust}
-                  icon="🤝"
-                />
-
-                <Score
-                  name="Communication"
-                  value={p1.communication}
-                  icon="💬"
-                />
-
-                <Score
-                  name="Empathy"
-                  value={p1.empathy}
-                  icon="❤️"
-                />
-
-                <Score
-                  name="Maturity"
-                  value={p1.maturity}
-                  icon="🧠"
-                />
-
-              </div>
-
-              <div className="seed-box">
-
-                <h3>
-                  🌱 SEEDS FOUND
-                </h3>
-
-                <strong>
-                  {p1.seed_count ?? 0}
-                </strong>
-
-                <p>
-                  {p1.biggest_seed || "No suspicious seed found 🍉"}
-                </p>
-
-              </div>
-
-            </div>
-
-            {/* PLAYER 2 */}
-
-            <div className="result-card">
-
-              <h2>
-                🍉 {player2}
-              </h2>
-
-              <div className="personality">
-                {p2.personality || "Watermelon Mystery 🍉"}
-              </div>
-
-              <div className="score-grid">
-
-                <Score
-                  name="Green"
-                  value={p2.green_score}
-                  icon="🟢"
-                />
-
-                <Score
-                  name="Sweetness"
-                  value={p2.sweetness}
-                  icon="🍬"
-                />
-
-                <Score
-                  name="Trust"
-                  value={p2.trust}
-                  icon="🤝"
-                />
-
-                <Score
-                  name="Communication"
-                  value={p2.communication}
-                  icon="💬"
-                />
-
-                <Score
-                  name="Empathy"
-                  value={p2.empathy}
-                  icon="❤️"
-                />
-
-                <Score
-                  name="Maturity"
-                  value={p2.maturity}
-                  icon="🧠"
-                />
-
-              </div>
-
-              <div className="seed-box">
-
-                <h3>
-                  🌱 SEEDS FOUND
-                </h3>
-
-                <strong>
-                  {p2.seed_count ?? 0}
-                </strong>
-
-                <p>
-                  {p2.biggest_seed || "No suspicious seed found 🍉"}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          {/* COMPARISON */}
-
-          <div className="comparison-card">
-
-            <h2>
-              🍉 WATERMELON COMPARISON
-            </h2>
-
-            {result.comparison &&
-            result.comparison.length > 0 ? (
-
-              result.comparison.map(
-                (item, index) => (
-
-                  <p key={index}>
-                    {item}
-                  </p>
-
-                )
-              )
-
-            ) : (
-
-              <p>
-                The watermelons are still arguing about
-                who has more seeds. 🍉
-              </p>
-
+            {mode === "couple" && (
+              <ResultCard
+                name={player2Name}
+                data={result.player2}
+              />
             )}
-
           </div>
 
-          {/* RANDOM PREDICTION */}
+          {mode === "couple" && (
+            <div className="comparison-card">
+              <h2>🍉 WATERMELON COMPARISON</h2>
+
+              {result.comparison?.map((text, index) => (
+                <p key={index}>
+                  {text}
+                </p>
+              ))}
+            </div>
+          )}
 
           <div className="fun-card">
-
             <h2>
               🔮 RANDOM WATERMELON PREDICTION
             </h2>
 
             <p>
-              {getPrediction(
-                p1,
-                p2,
-                player1,
-                player2
-              )}
+              {mode === "single"
+                ? `${player1Name} probably has at least one suspicious watermelon seed. 🍉`
+                : `${player1Name} and ${player2Name} definitely have some suspicious seeds. 🍉`}
             </p>
-
           </div>
-
-          {/* AGAIN */}
 
           <button
             className="main-button"
-            onClick={restartGame}
+            onClick={resetGame}
           >
             🍉 BITE AGAIN
           </button>
 
           <p className="tiny-text">
-            This game is for fun and self-reflection.
-            It does not diagnose personality,
-            relationships, or mental health.
+            This game is for fun and self-reflection. It does not
+            diagnose personality, relationships, or mental health.
           </p>
 
         </div>
-
       </div>
     );
   }
@@ -670,21 +518,93 @@ function App() {
 }
 
 
-// ======================================================
-// SCORE COMPONENT
-// ======================================================
+// =====================================
+// RESULT CARD
+// =====================================
 
-function Score({
-  name,
-  value,
-  icon,
-}) {
+function ResultCard({ name, data }) {
+  if (!data) {
+    return null;
+  }
 
-  const safeValue = Number(value) || 0;
+  return (
+    <div className="result-card">
 
-  const percentage = Math.max(
+      <h2>
+        🍉 {name}
+      </h2>
+
+      <div className="personality">
+        {data.personality || "Watermelon Mystery 🍉"}
+      </div>
+
+      <div className="score-grid">
+
+        <Score
+          name="Green"
+          icon="🟢"
+          value={data.green_score}
+        />
+
+        <Score
+          name="Sweetness"
+          icon="🍬"
+          value={data.sweetness}
+        />
+
+        <Score
+          name="Trust"
+          icon="🤝"
+          value={data.trust}
+        />
+
+        <Score
+          name="Communication"
+          icon="💬"
+          value={data.communication}
+        />
+
+        <Score
+          name="Empathy"
+          icon="❤️"
+          value={data.empathy}
+        />
+
+        <Score
+          name="Maturity"
+          icon="🧠"
+          value={data.maturity}
+        />
+
+      </div>
+
+      <div className="seed-box">
+
+        <h3>🌱 SEEDS FOUND</h3>
+
+        <strong>
+          {data.seed_count ?? 0}
+        </strong>
+
+        <p>
+          {data.biggest_seed ||
+            "No suspicious seed found 🍉"}
+        </p>
+
+      </div>
+    </div>
+  );
+}
+
+
+// =====================================
+// SCORE BAR
+// =====================================
+
+function Score({ name, icon, value }) {
+  const score = Math.max(
     0,
-    Math.min(100, safeValue)
+    Math.min(100, Number(value) || 0)
   );
 
   return (
@@ -697,7 +617,7 @@ function Score({
         </span>
 
         <strong>
-          {Math.round(percentage)}%
+          {Math.round(score)}%
         </strong>
 
       </div>
@@ -707,7 +627,7 @@ function Score({
         <div
           className="score-fill"
           style={{
-            width: `${percentage}%`,
+            width: `${score}%`,
           }}
         />
 
@@ -715,59 +635,6 @@ function Score({
 
     </div>
   );
-}
-
-
-// ======================================================
-// RANDOM PREDICTION
-// ======================================================
-
-function getPrediction(
-  p1,
-  p2,
-  name1,
-  name2
-) {
-
-  const predictions = [
-
-    `😂 ${name1} probably overthinks the famous "K" reply more.`,
-
-    `🍉 ${name2} is more likely to say "I'm fine" while clearly NOT being fine.`,
-
-    `🌱 Someone here definitely has a hidden seed called "${p1.biggest_seed || "mystery seed"}".`,
-
-    `😂 ${name1} is probably the first one to send a meme after an argument.`,
-
-    `👀 ${name2} looks more likely to remember a tiny argument from 6 months ago.`,
-
-    `🍉 This watermelon has suspiciously similar personalities.`,
-
-    `🌱 The seeds are small now... but somebody is collecting them.`,
-
-    `😂 One of you says "whatever" but absolutely does NOT mean whatever.`,
-
-    `❤️ ${
-      Number(p1.empathy || 0) >
-      Number(p2.empathy || 0)
-        ? name1
-        : name2
-    } wins the empathy battle.`,
-
-    `💬 ${
-      Number(p1.communication || 0) >
-      Number(p2.communication || 0)
-        ? name1
-        : name2
-    } is more likely to say "let's just talk about it."`,
-
-  ];
-
-  return predictions[
-    Math.floor(
-      Math.random() * predictions.length
-    )
-  ];
 }
 
 export default App;
